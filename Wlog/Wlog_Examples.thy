@@ -4,7 +4,7 @@ begin
 
 lemma "a*a \<ge> (0::int)"
 proof -
-  wlog geq0: "a\<ge>0" for a
+  wlog geq0: "a\<ge>0" generalizing a
   proof -
     from negation have "- a \<ge> 0" by simp
     then have "- a * - a \<ge> 0" by (rule hypothesis)
@@ -24,16 +24,14 @@ proof -
   goal "a+b \<ge> 1"
 
   (* goal "?thesis" (is "a+b \<ge> 1") *)
-  have neq2: "a>b\<or>b>a" using neq bla by auto 
+  have neq2: "a>b \<or> b>a" using neq bla by auto 
   have comm: "1 \<le> a + b \<Longrightarrow> 1 \<le> b + a" for a b :: nat by auto
 
   let ?a = a
 
-  have test[]: "\<And>a. b \<noteq> a \<Longrightarrow> a \<noteq> b \<Longrightarrow> 1 \<le> a + b" sorry
+  have test: "\<And>a. b \<noteq> a \<Longrightarrow> a \<noteq> b \<Longrightarrow> 1 \<le> a + b" sorry
 
-  print_commands
-
-  wlog neq3: "b\<noteq>a" for a assumes neq
+  wlog neq3: "b\<noteq>a" generalizing a keeping neq
   proof (cases rule:hypothesis[where a=a]) print_cases
     case neq show ?case using assms(2) by blast 
     case neq3 show ?case using assms(2) by blast 
@@ -41,8 +39,8 @@ proof -
 
   have aux: "P \<Longrightarrow> (P \<Longrightarrow> Q) \<Longrightarrow> Q" for P Q by metis
 
-  wlog geq: "a > b" for a b assumes neq3
-  proof (cases "a>b")
+  wlog geq: "a > b" generalizing a b keeping neq3
+  proof (cases "a > b")
   case True show ?thesis using True hypothesis by blast
   next case False show ?thesis proof (rule aux, cases rule:hypothesis[of a b])
     case geq show ?case using False neq2 by blast
@@ -53,11 +51,11 @@ proof -
 
   note assms = neq neq3 
 
-  have "b<a\<or>a<b" by (simp add: geq)
+  have "b<a \<or> a<b" by (simp add: geq)
 
  (* apply (tactic \<open>resolve_tac @{context} [neq2'] 1\<close>) using assms by auto *)
 
-  wlog tmp: "a=a" for a b assumes geq 
+  wlog tmp: "a=a" generalizing a b keeping geq 
     using hypothesis neq geq by metis
 
   from geq have "a \<ge> 1" by auto

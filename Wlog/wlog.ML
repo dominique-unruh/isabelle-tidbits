@@ -27,25 +27,26 @@ fun dest_static2 ctx verbose prev_facts facts =
 
 
 (* Given a theorem thm, replaces all occurrences of the free vars "fixes" by the free vars "fixed".
-   For any hypothesis of thm that is not a fact in the context "ctx", a premise is added to the theorem.
-   (Thus, the resulting theorem will be valid in "ctx")
+   For any hypothesis of thm that is not a fact in the context "ctxt", a premise is added to the theorem.
+   (Thus, the resulting theorem will be valid in "ctxt")
 
    fixes is a list of (_,n,T) where n is the var name and T the type
 
    fixed is a list of variable names (types will be the same).
  *)
-fun translate_thm ctx fixes fixed thm = 
+fun translate_thm ctxt fixes fixed thm = 
   let val hyps = Thm.chyps_of thm
       val thm = fold_rev Thm.implies_intr hyps thm
       val idx = Thm.maxidx_of thm + 1
 (* val _ = @{print} (1,thm) *)
-      val thm = Thm.generalize ([],map #2 fixes) idx thm
+      val thm = Thm.generalize (Names.empty, map #2 fixes |> Names.make_set) idx thm
 (* val _ = @{print} (2,thm,idx,fixes,fixed) *)
-      val thm = Thm.instantiate ([],map2 (fn (_,n,T) => fn m => ((Name.clean_index(n,idx),T),Thm.cterm_of ctx (Free(m,T)))) fixes fixed) thm
+      val thm = thm |> Thm.instantiate (TVars.empty,
+        map2 (fn (_,n,T) => fn m => ((Name.clean_index(n,idx),T),Thm.cterm_of ctxt (Free(m,T)))) fixes fixed |> Vars.make)
 (* val _ = @{print} (3,thm) *)
-      val facts = Proof_Context.facts_of ctx
+      val facts = Proof_Context.facts_of ctxt
       fun mk_hypnew hyp =
-        let val chyp = Thm.cterm_of ctx hyp
+        let val chyp = Thm.cterm_of ctxt hyp
             val hyp_thm = Thm.trivial chyp
             val candidates = Facts.could_unify facts hyp |> map fst
             fun try_cand cand fallback = 
@@ -99,23 +100,37 @@ fun negation_tac ctx thm hyp_thm assms =
   THEN
   ALLGOALS (fn i => (@{print} (assms,i); resolve_tac ctx [nth assms (i-1)] i))
 
-fun wlog (newassm_name,newassm) (fixes:(binding*string*typ) list) (thesis:term) (assms:(string*thm list)list) int state =
-  let val _ = @{print} (Proof.goal state)
-      val ctx = Proof.context_of state
-      val facts = Proof_Context.facts_of ctx
+fun print_entity_binding entity binding = 
+  Pretty.marks_str ([Position.entity_markup entity (Binding.name_of binding, Binding.pos_of binding)], Binding.name_of binding) |> Pretty.string_of
+
+val print_fact_binding = print_entity_binding Markup.factN
+
+fun print_term_as_statement ctxt heading term = 
+Element.pretty_statement ctxt heading (Thm.assume (Thm.cterm_of ctxt term)) |> Pretty.string_of
+
+fun wlog (pos:Position.T) (newassm_name, newassm)
+    (fixes: (binding*string*typ) list) (thesis:term) 
+    (assms: (string*thm list) list) int state =
+  let
+      (* val _ = @{print} (Proof.goal state) *)
+      val ctxt = Proof.context_of state
+      val facts = Proof_Context.facts_of ctxt
       (* flat_assms: list of (name,i,t) where t are all assumptions, with i an index to distinguish several propositions in the same fact. (i=0 if there is only one) *)
       val flat_assms = assms |> map (fn (name,thms) => case thms of [th] => [(name,0,Thm.prop_of th)]
-                                                                  | _ => map_index (fn (i,thm) => (name,i+1,Thm.prop_of thm)) thms) |> List.concat
-      val flat_assms = (Binding.name_of newassm_name,0,newassm) :: flat_assms
+                                                          | _ => map_index (fn (i,thm) => (name,i+1,Thm.prop_of thm)) thms) |> List.concat
       fun idx_name (name,0) = name | idx_name (name,i) = name ^ "_" ^ string_of_int i
-      val _ = List.map (fn (name,i,t) => Output.information ("[Wlog] Keeping fact: " ^ idx_name(name,i) ^ ": " ^ (Syntax.string_of_term ctx t))) flat_assms
+      val _ = List.map (fn (name,i,t) => Output.information ("[Wlog] Keeping fact: " ^ idx_name (name,i) ^ ": " ^ (Syntax.string_of_term ctxt t))) flat_assms
+      val flat_assms = (Binding.name_of newassm_name, 0, newassm) :: flat_assms
       val hyp = Logic.list_implies (map #3 flat_assms, thesis)
       val hyp = fold (fn (_,a,T) => fn t => Logic.all_const T $ (Term.absfree (a,T) t)) fixes hyp
       (* val _ = Output.information ("[Wlog] New goal will be:" ^ (Syntax.string_of_term ctx hyp)) *)
-      val _ = Output.information ("[Wlog] " ^ (Element.pretty_statement ctx "New goal:" (Thm.assume (Thm.cterm_of ctx hyp)) |> Pretty.string_of))
+      val _ = Output.information ("[Wlog] " ^ print_term_as_statement ctxt "New goal:" hyp)
       val case_names = map (fn (name,i,_) => idx_name(name,i)) flat_assms
       val case_names = Rule_Cases.cases_hyp_names case_names (map (K []) case_names)
-      val state = Proof.presume [] [] [((@{binding hypothesis},[case_names]),[(hyp,[])])] state
+      val _ = Output.information ("Please prove that \"" ^ print_fact_binding newassm_name ^ "\" can be assumed w.l.o.g.\nYou may use the following fact:\n  " ^
+            print_term_as_statement ctxt "hypothesis:" hyp)
+
+      val state = Proof.presume [] [] [((Binding.make ("hypothesis", pos),[case_names]),[(hyp,[])])] state
       val hyp_thm = Proof.the_fact state
       (* val negation_thesis = Logic.mk_implies (negate newassm, thesis) *)
 
@@ -148,30 +163,32 @@ fun wlog (newassm_name,newassm) (fixes:(binding*string*typ) list) (thesis:term) 
       val (_,state) = Proof.have true NONE after_qed [] [((@{binding negation},[]),[(negate newassm,[])])] [((Binding.empty,[]),[(thesis,[])])] int state 
   in state end
 
-fun wlog_cmd ((bind,stmt) : Binding.binding * string) (* New assumptions added wlog *)
+fun wlog_cmd (pos: Position.T) 
+             ((bind,stmt) : Binding.binding * string) (* New assumptions added wlog *)
              (fixes : binding list) (* Variables to be generalized *)
-             (goal : string) (* Current goal *)
+             (* (goal : string) (* Current goal *) *)
              (assms : (Facts.ref * Token.src list) list) (* Assumptions to keep *)
              int state =
   let val ctx = Proof.context_of state
       val stmt = Syntax.read_prop ctx stmt                                 
-      val assms' = map (fn (fact,_) => (Facts.name_of_ref fact, Proof_Context.get_fact ctx fact)) assms
-      val goal' = Syntax.read_prop ctx goal
+      val assms' = map (fn (fact,_) => (Facts.ref_name fact, Proof_Context.get_fact ctx fact)) assms
+      val goal' = Syntax.read_prop ctx "?thesis"
       val constr = Variable.constraints_of ctx |> #1
       val fixes' = map (fn b => let val internal = Variable.lookup_fixed ctx (Binding.name_of b) |> Option.valOf
                                     val T = Vartab.lookup constr (internal,~1) |> Option.valOf
                                 in (b,internal,T) end) fixes
       (* val _ = @{print} assms *)
-  in wlog (bind,stmt) fixes' goal' assms' int state end                 
+  in wlog pos (bind,stmt) fixes' goal' assms' int state end                 
 
 val wlog_parser = (Scan.optional (Parse.binding --| Parse.$$$ ":") Binding.empty -- Parse.prop) -- 
-                  (Scan.optional (@{keyword "for"} |-- Scan.repeat Parse.binding) []) --
-                  (Scan.optional (@{keyword "shows"} |-- Parse.prop) "?thesis") --
-                  (Scan.optional (@{keyword "assumes"} |-- Parse.thms1) [])
+                  (Scan.optional (@{keyword "generalizing"} |-- Scan.repeat Parse.binding) []) --
+                  (* (Scan.optional (@{keyword "shows"} |-- Parse.prop) "?thesis") -- *)
+                  (Scan.optional (@{keyword "keeping"} |-- Parse.thms1) [])
+                  |> Parse.position
 
 val _ =
   Outer_Syntax.command @{command_keyword wlog} "TODO"
-    (wlog_parser >> (fn ((((stmt,fixes),goal),assms)) => Toplevel.proof' (wlog_cmd stmt fixes goal assms)));
+    (wlog_parser >> (fn (((stmt,fixes),assms),pos) => Toplevel.proof' (wlog_cmd pos stmt fixes assms)));
 
 
 fun extract_thesis ctx [] [] [(_,[thesis])] = 
