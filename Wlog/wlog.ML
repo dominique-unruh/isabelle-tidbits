@@ -1,7 +1,39 @@
-structure Wlog =
+structure Wlog : sig
+
+val wlog : Position.T -> (* Position (for bindings and markup) *)
+           binding * term -> (* New assumption *)
+           (binding * string * typ) list -> (* Generalizing *)
+           term -> (* Goal to operate on *)
+           (string * thm list) list -> (* Assumptions to keep *)
+           bool -> (* internal (as in Proof.show, Proof.have) *)
+           Proof.state -> Proof.state
+
+val wlog_cmd : Position.T -> binding * string -> binding list -> (Facts.ref * Token.src list) list -> bool -> Proof.state -> Proof.state
+
+end =
 struct
 
-(* Like Facts.dest_static, but also returns facts that have been overwritten with a new fact of the same name *)
+fun print_entity_binding entity binding = 
+  Pretty.marks_str ([Position.entity_markup entity (Binding.name_of binding, Binding.pos_of binding)], Binding.name_of binding) |> Pretty.string_of
+
+val print_fact_binding = print_entity_binding Markup.factN
+
+fun print_term_as_statement ctxt heading term = 
+  Element.pretty_statement ctxt heading (Thm.assume (Thm.cterm_of ctxt term)) |> Pretty.string_of
+
+val wlog_lost_facts_prefix = "lost"
+
+fun binding_within qualifier pos name = let
+  val (path, name) = split_last (Long_Name.explode name)
+  val path = case path of "local" :: path => path | path => path
+  val path = case path of p :: ps => if p = wlog_lost_facts_prefix then ps else ps | ps => ps 
+  val binding = Binding.make (name,pos)
+      |> fold_rev (fn qualifier => fn b => Binding.qualify true qualifier b) path
+      |> Binding.qualify true qualifier
+in binding end
+
+
+(* (* Like Facts.dest_static, but also returns facts that have been overwritten with a new fact of the same name *)
 fun dest_static2 ctx verbose prev_facts facts =
   let val ctx_generic = Context.Proof ctx
       fun thms_eq [] [] = true
@@ -23,7 +55,14 @@ fun dest_static2 ctx verbose prev_facts facts =
       not verbose andalso Facts.is_concealed facts name then I
     else cons (name, ths)) facts []
   |> sort_by #1
-  end
+  end *)
+
+(* Proves premise i using facts if possible. Otherwise, just leaves it in place. *)
+fun prove_prem_if_possible ctxt facts i thm = let
+  val prem = nth (Thm.prems_of thm) (i-1)
+  val candidates = Facts.could_unify facts prem |> map fst
+  val result = solve_tac ctxt candidates i thm |> Seq.pull |> Option.map fst
+in case result of SOME thm => thm | NONE => thm end
 
 
 (* Given a theorem thm, replaces all occurrences of the free vars "fixes" by the free vars "fixed".
@@ -36,16 +75,17 @@ fun dest_static2 ctx verbose prev_facts facts =
  *)
 fun translate_thm ctxt fixes fixed thm = 
   let val hyps = Thm.chyps_of thm
+      (* Make all hypotheses of thm into premises (using \<Longrightarrow>) *)
       val thm = fold_rev Thm.implies_intr hyps thm
       val idx = Thm.maxidx_of thm + 1
-(* val _ = @{print} (1,thm) *)
+      (* Replace all free vars in "fixes" by schematic vars of the same name *)
       val thm = Thm.generalize (Names.empty, map #2 fixes |> Names.make_set) idx thm
-(* val _ = @{print} (2,thm,idx,fixes,fixed) *)
+      (* And not replace those schematic vars by the free variables in `fixes` *)
       val thm = thm |> Thm.instantiate (TVars.empty,
-        map2 (fn (_,n,T) => fn m => ((Name.clean_index(n,idx),T),Thm.cterm_of ctxt (Free(m,T)))) fixes fixed |> Vars.make)
-(* val _ = @{print} (3,thm) *)
+        map2 (fn (_,n,T) => fn m => (((n,idx),T), Thm.cterm_of ctxt (Free (m,T)))) 
+            fixes fixed |> Vars.make)
       val facts = Proof_Context.facts_of ctxt
-      fun mk_hypnew hyp =
+(*       fun mk_hypnew hyp =
         let val chyp = Thm.cterm_of ctxt hyp
             val hyp_thm = Thm.trivial chyp
             val candidates = Facts.could_unify facts hyp |> map fst
@@ -59,10 +99,11 @@ fun translate_thm ctxt fixes fixed thm =
       val prems = take (length hyps) (Thm.prems_of thm)
       val hypsnew = map mk_hypnew prems
 (* val _ = @{print} (thm,map (Thm.cterm_of ctx) prems) *)
-      val thm = thm OF hypsnew
+      val thm = thm OF hypsnew *)
+      val thm = fold (prove_prem_if_possible ctxt facts) (downto (length hyps, 1)) thm
    in thm end
 
-
+(* TODO: Use something like map_aterms or something? *)
 fun ren_frees [] = I
   | ren_frees pairs =
       let fun substf u =
@@ -74,10 +115,10 @@ fun ren_frees [] = I
                     | _ => u
       in  substf  end;
 
-fun get_fixes ctx =
+(* fun get_fixes ctx =
     let val fixes = Variable.dest_fixes ctx
         val (constr,_) = Variable.constraints_of ctx
-    in map (fn (int,ext) => case Vartab.lookup constr (ext,~1) of NONE => error "no constraint" | SOME T => (int,ext,T)) fixes end
+    in map (fn (int,ext) => case Vartab.lookup constr (ext,~1) of NONE => error "no constraint" | SOME T => (int,ext,T)) fixes end *)
 
 
 fun negate (Const(@{const_name Trueprop},_) $ t) = HOLogic.mk_Trueprop (HOLogic.mk_not t)
@@ -100,14 +141,36 @@ fun negation_tac ctx thm hyp_thm assms =
   THEN
   ALLGOALS (fn i => (@{print} (assms,i); resolve_tac ctx [nth assms (i-1)] i))
 
-fun print_entity_binding entity binding = 
-  Pretty.marks_str ([Position.entity_markup entity (Binding.name_of binding, Binding.pos_of binding)], Binding.name_of binding) |> Pretty.string_of
+(* Prefix put in fron of "lost" facts. *)
+val wlog_lost_facts_prefix = "lost"
 
-val print_fact_binding = print_entity_binding Markup.factN
+(* 
+wlog wlogassmname: \<open>wlogassm\<close> generalizing x y z keeping fact1 fact2
+  [\<dots> proof \<dots>]
 
-fun print_term_as_statement ctxt heading term = 
-Element.pretty_statement ctxt heading (Thm.assume (Thm.cterm_of ctxt term)) |> Pretty.string_of
+translates roughly to:
 
+  presume hypothesis[case_names wlogassmname fact1 fact2]:
+    \<open>\<And>x y z. \<lbrakk>wlogassm; fact1; fact2\<rbrakk> \<Longrightarrow> ?thesis\<close>
+  have \<open>?thesis\<close> if negation: \<open>\<not> wlogassm\<close>
+    [\<dots> proof \<dots>]
+  then show \<open>?thesis\<close>
+    [\<dots> autogenerated proof \<dots>]
+next
+  fix x y z
+  (* Below, in all terms, occurrences of x y z renamed to the fixed x y z *)
+  let ?wlog_goal = [what ?thesis was before]
+  let ?x = [what ?x was before] (* for each ?x that was defined before; with occurrences of x y z renamed to the fixed x y z *)
+  assume wlogassmname: \<open>wlogassm\<close>  
+  assume fact1: \<open>fact1\<close>
+  assume fact2: \<open>fact2\<close>
+  have lost.xxx: \<open>assms \<Longrightarrow> xxx\<close> 
+     (* For any fact xxx: \<open>xxx\<close> that was present in the proof before the wlog command.
+         assms are the assumptions that were present in the context before "next" (e.g., via assume command).
+         (Assumptions that still hold, e.g., "fact1", "fact2", are removed automatically from assms.) *)
+    [\<dots> proof carried over \<dots>]
+
+*)
 fun wlog (pos:Position.T) (newassm_name, newassm)
     (fixes: (binding*string*typ) list) (thesis:term) 
     (assms: (string*thm list) list) int state =
@@ -119,48 +182,58 @@ fun wlog (pos:Position.T) (newassm_name, newassm)
       val flat_assms = assms |> map (fn (name,thms) => case thms of [th] => [(name,0,Thm.prop_of th)]
                                                           | _ => map_index (fn (i,thm) => (name,i+1,Thm.prop_of thm)) thms) |> List.concat
       fun idx_name (name,0) = name | idx_name (name,i) = name ^ "_" ^ string_of_int i
-      val _ = List.map (fn (name,i,t) => Output.information ("[Wlog] Keeping fact: " ^ idx_name (name,i) ^ ": " ^ (Syntax.string_of_term ctxt t))) flat_assms
+      (* val _ = List.map (fn (name,i,t) => Output.information ("Keeping assumption: " ^ idx_name (name,i) ^ ": " ^ (Syntax.string_of_term ctxt t))) flat_assms *)
       val flat_assms = (Binding.name_of newassm_name, 0, newassm) :: flat_assms
       val hyp = Logic.list_implies (map #3 flat_assms, thesis)
       val hyp = fold (fn (_,a,T) => fn t => Logic.all_const T $ (Term.absfree (a,T) t)) fixes hyp
       (* val _ = Output.information ("[Wlog] New goal will be:" ^ (Syntax.string_of_term ctx hyp)) *)
-      val _ = Output.information ("[Wlog] " ^ print_term_as_statement ctxt "New goal:" hyp)
+      (* val _ = Output.information (print_term_as_statement ctxt "New goal:" hyp) *)
       val case_names = map (fn (name,i,_) => idx_name(name,i)) flat_assms
       val case_names = Rule_Cases.cases_hyp_names case_names (map (K []) case_names)
-      val _ = Output.information ("Please prove that \"" ^ print_fact_binding newassm_name ^ "\" can be assumed w.l.o.g.\nYou may use the following fact:\n  " ^
-            print_term_as_statement ctxt "hypothesis:" hyp)
+      val negated_newassm = negate newassm
+      val _ = Output.information ("Please prove that \"" ^ print_fact_binding newassm_name ^ "\" can be assumed w.l.o.g.\nYou may use the following facts:\n" ^
+            print_term_as_statement ctxt "hypothesis:" hyp ^ "\n" ^ print_term_as_statement ctxt "negation:" negated_newassm)
 
-      val state = Proof.presume [] [] [((Binding.make ("hypothesis", pos),[case_names]),[(hyp,[])])] state
+      val state = Proof.presume [] [] [((Binding.make ("hypothesis", pos), [case_names]), [(hyp,[])])] state
       val hyp_thm = Proof.the_fact state
       (* val negation_thesis = Logic.mk_implies (negate newassm, thesis) *)
 
-      fun after_qed (_(*ctx*),_) state = 
+      fun after_qed (_(*ctxt*),_) state = 
       let 
           val proven_thm = Proof.the_fact state
-          val _ = @{print} (proven_thm)
-          val (_,state) = Proof.show true NONE (fn _ => I) [] [] [((Binding.empty,[]),[(thesis,[])])] int state
-           val state = Proof.apply (Method.Basic (fn ctx => 
-              (Method.SIMPLE_METHOD (negation_tac ctx proven_thm hyp_thm (assms |> map snd |> List.concat)))),
+          val (_,state) = Proof.show true NONE (fn _ => I) [] [] 
+                             [((Binding.empty,[]),[(thesis,[])])] int state
+          val state = Proof.apply (Method.Basic (fn ctxt => 
+              (Method.SIMPLE_METHOD (negation_tac ctxt proven_thm hyp_thm (assms |> map snd |> List.concat)))),
                       Position.no_range) state
               |> Seq.the_result "internal error: negation_tac failed"
           val state = Proof.local_done_proof state
-          val let_bindings = Variable.binds_of (Proof.context_of state) |> Vartab.dest
+          val ctxt_before_next = Proof.context_of state
+          val let_bindings = Variable.binds_of ctxt_before_next |> Vartab.dest
           val state = Proof.next_block state
-          val lost_facts = dest_static2 (Proof.context_of state) false [Proof_Context.facts_of (Proof.context_of state)] facts
+          val lost_facts = Facts.dest_static false [Proof_Context.facts_of (Proof.context_of state)] facts
+                  |> filter (fn (name,_) => name <> "local.this")
           val _ = @{print} ("lost_facts",map #1 lost_facts)
           val (fixed,state) = Proof.map_context_result (Proof_Context.add_fixes (map (fn (a,_,T) => (a,SOME T,NoSyn)) fixes)) state
           val rename_fixed = ren_frees (map2 (fn (_,a,_) => fn b => (a,b)) fixes fixed)
           val state = fold (fn (name,(_,t)) => Proof.map_context (Variable.bind_term (name,rename_fixed t))) let_bindings state
           val state = Proof.map_context (Variable.bind_term (("wlog_goal",0),rename_fixed thesis)) state
           val state = fold (fn (name,assm) => fn state => 
-                        Proof.assume [] [] [((Binding.name name,[]),map (fn t => (rename_fixed (Thm.prop_of t),[])) assm)] state) assms state
-          val ctx = Proof.context_of state
-          val state = Proof.note_thmss (map (fn (name,thms) => ((Long_Name.explode name |> split_last |> snd |> Binding.name,[]),[(map (translate_thm ctx fixes fixed) thms, [])])) lost_facts) state
+                        Proof.assume [] [] [((Binding.name name,[]), map (fn t => (rename_fixed (Thm.prop_of t),[])) assm)] state) assms state
+          val ctxt = Proof.context_of state
+          (* val outer_ctxt = ctxt_before_next |> Proof_Context.theory_of |> Proof_Context.init_global *)
+          (* fun export thms = Proof_Context.export ctxt_before_next outer_ctxt thms *)
+          fun export thm = translate_thm ctxt fixes fixed thm
+          val state = Proof.note_thmss (map (fn (name,thms) => ((binding_within wlog_lost_facts_prefix pos name, []),
+                        [(map export thms, [])])) lost_facts) state
           val state = Proof.assume [] [] [((newassm_name,[]),[(rename_fixed newassm,[])])] state (* Should be last in order to override "this" *)
           (* TODO: define assms to contain all assumptions (carried over and new) *)
+          (* TODO: Print info about "lost facts". *)
       in state end
-                            
-      val (_,state) = Proof.have true NONE after_qed [] [((@{binding negation},[]),[(negate newassm,[])])] [((Binding.empty,[]),[(thesis,[])])] int state 
+
+      val (_,state) = Proof.have true NONE after_qed [] 
+             [((Binding.make ("negation", pos),[]), [(negated_newassm, [])])]
+             [((Binding.empty,[]), [(thesis,[])])] int state
   in state end
 
 fun wlog_cmd (pos: Position.T) 
@@ -205,6 +278,5 @@ val _ =
       case extract_thesis (Proof.context_of state) fixes assumes shows of NONE => state
         | SOME t => Proof.map_context (Variable.bind_term (("thesis",0),t)) state
       ))))
-
 
 end
