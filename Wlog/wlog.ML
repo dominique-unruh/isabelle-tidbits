@@ -71,24 +71,6 @@ fun translate_thm ctxt fixes fixed thm =
       val thm = fold (prove_prem_if_possible ctxt facts) (length hyps downto 1) thm
    in thm end
 
-(* (* Renames free variables. pairs = [(old1,new1),(old2,new2),\<dots>].
-   Differs from Term.subst_freee in that `pairs` only contains strings. *)
-fun rename_frees pairs = Term.map_aterms (
-  fn t as Free(n,T) => (case AList.lookup (op=) pairs n of
-                           SOME n' => Free(n',T) | NONE => t)
-  | t => t) *)
-
-(* fun ren_frees [] = I
-  | ren_frees pairs =
-      let fun substf u =
-            case u of Abs(a,T,t) => Abs(a, T, substf t)
-                    | t$u' => substf t $ substf u'
-                    | Free(n,T) => (case AList.lookup (op=) pairs n of
-                                      SOME n' => Free(n',T)
-                                    | NONE => u)
-                    | _ => u
-      in  substf  end; *)
-
 
 (* We only support negation of bools here (not something like "\<And>P. t \<Longrightarrow> P") because it is not clear
    how to prove negation_tac below otherwise. *)

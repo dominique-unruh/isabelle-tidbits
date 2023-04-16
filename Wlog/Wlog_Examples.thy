@@ -2,67 +2,6 @@ theory Wlog_Examples
   imports Wlog Complex_Main
 begin
 
-lemma
-  fixes a b :: nat
-  assumes bla: "True"
-  assumes neq: "a \<noteq> b"
-  shows "a+b \<ge> 1" (is ?th) and "a+b \<ge> 0"
-proof -
-  let ?thesis = "a+b \<ge> 1"
-
-  (* goal "?thesis" (is "a+b \<ge> 1") *)
-  have neq2: "a>b \<or> b>a" using neq bla by auto 
-  have comm: "1 \<le> a + b \<Longrightarrow> 1 \<le> b + a" for a b :: nat by auto
-
-  let ?a = a
-
-  have test: "\<And>a. b \<noteq> a \<Longrightarrow> a \<noteq> b \<Longrightarrow> 1 \<le> a + b" sorry
-
-  wlog neq3: "b\<noteq>a" generalizing a keeping neq
-  proof (cases rule:hypothesis[where a=a]) print_cases
-    case neq show ?case using assms(2) by blast 
-    case neq3 show ?case using assms(2) by blast 
-  qed
-
-  have aux: "P \<Longrightarrow> (P \<Longrightarrow> Q) \<Longrightarrow> Q" for P Q by metis
-
-  wlog geq: "a > b" generalizing a b keeping neq3
-  proof (cases "a > b")
-    case True 
-    show ?thesis
-      using True hypothesis by blast
-  next
-    case False
-    show ?thesis
-    proof (rule aux, cases rule:hypothesis[of a b])
-      case geq
-      show ?case
-        using False wlog.neq2
-        by simp
-    next
-      case neq3 
-      show ?case using wlog.neq2 by auto
-    next 
-      assume "1 \<le> b + a" 
-      then show "1 \<le> a + b" by linarith
-    qed
-  qed
-
-  note assms = neq neq3 
-
-  have "b<a \<or> a<b" by (simp add: geq)
-
-  wlog tmp: "a=a" generalizing a b keeping geq 
-    print_theorems
-    using hypothesis neq geq by metis
-
-  from geq have "a \<ge> 1" by auto
-
-  then show "1 \<le> a + b" by auto
-next
-  show "a+b \<ge> 0" by auto
-qed
-
 text \<open>The theorem @{thm [source] Complex.card_nth_roots} has the additional assumption \<^term>\<open>n > 0\<close>.
   We use exactly the same proof except for stating that w.l.o.g., \<^term>\<open>n > 0\<close>.\<close>
 lemma card_nth_roots_strengthened:
@@ -105,4 +44,34 @@ proof -
   finally show \<open>?lhs \<ge> 0\<close>
     by -
 qed
+
+text \<open>This illustrates how facts already proven before a @{command wlog} can be still be used after the wlog.
+  The example does not do anything useful.\<close>
+lemma \<open>A \<Longrightarrow> B \<Longrightarrow> A \<and> B\<close>
+proof -
+  have test1: \<open>1=1\<close> by simp
+  assume a: \<open>A\<close>
+  then have test2: \<open>A \<or> 1\<noteq>2\<close> by simp
+      \<comment> \<open>Isabelle marks this as being potentially based on assumption @{thm [source] a}.
+          (Note: this is not done by actual dependency tracking. Anything that is proven after the @{command assume} command can depend on the assumption.)\<close>
+  assume b: \<open>B\<close>
+  with a have test3: \<open>A \<and> B\<close> by simp
+      \<comment> \<open>Isabelle marks this as being potentially based on assumption @{thm [source] a}, @{thm [source] b}\<close>
+  wlog true: \<open>True\<close> generalizing A B keeping b
+    \<comment> \<open>A pointless wlog: we can wlog assume \<^term>\<open>True\<close>.
+       Notice: we only keep the assumption @{thm [source] b} around.\<close>
+    using negation by blast
+  text \<open>The already proven theorems cannot be accessed directly anymore (wlog starts a new proof block).
+        Recovered versions are available, however:\<close>
+  thm wlog.test1
+    \<comment> \<open>The fact is fully recovered since it did not depend on any assumptions.\<close>
+  thm wlog.test2
+    \<comment> \<open>This fact depended on assumption \<open>a\<close> which we did not keep. So the original fact might not hold anymore.
+        Therefore, @{thm [source] wlog.test2} becomes \<^term>\<open>A \<Longrightarrow> A \<or> 1 \<noteq> 2\<close>. (Note the added \<^term>\<open>A\<close> premise.)\<close>
+  thm wlog.test3
+    \<comment> \<open>This fact depended on assumptions \<open>a\<close> and \<open>b\<close>. But we kept @{thm [source] b}.
+        Therefore, @{thm [source] wlog.test2} becomes \<^term>\<open>A \<Longrightarrow> A \<and> B\<close>. (Note that only \<^term>\<open>A\<close> is added as a premise.)\<close>
+  oops
+    \<comment> \<open>Aborting the proof here because we cannot prove \<^term>\<open>A \<and> B\<close> anymore since we dropped assumption \<open>a\<close> for demonstration purposes.\<close>
+
 
