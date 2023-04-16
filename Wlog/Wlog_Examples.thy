@@ -1,20 +1,6 @@
 theory Wlog_Examples
-  imports Wlog Complex_Main "HOL-Analysis.Operator_Norm"
+  imports Wlog Complex_Main
 begin
-
-lemma "a*a \<ge> (0::int)"
-proof -
-  wlog geq0: "a\<ge>0" generalizing a
-  proof -
-    from negation have \<open>\<not> (a \<ge> 0)\<close> by auto
-    then have "- a \<ge> 0" by simp
-    then have "- a * - a \<ge> 0" by (rule hypothesis)
-    then show "a*a \<ge> 0" by simp
-  qed
-
-  from geq0 show ?thesis by simp
-qed
-
 
 lemma
   fixes a b :: nat
@@ -51,11 +37,11 @@ proof -
     proof (rule aux, cases rule:hypothesis[of a b])
       case geq
       show ?case
-        using False lost.neq2
+        using False wlog.neq2
         by simp
     next
       case neq3 
-      show ?case using lost.neq2 by auto
+      show ?case using wlog.neq2 by auto
     next 
       assume "1 \<le> b + a" 
       then show "1 \<le> a + b" by linarith
@@ -93,25 +79,25 @@ qed
 
 text \<open>This example follows very roughly Harrison, \<^url>\<open>https://www.cl.cam.ac.uk/~jrh13/papers/wlog.pdf\<close>\<close>
 lemma schur_ineq:
-  fixes a b c :: real and k :: nat
-  (* assumes a0: \<open>a \<ge> 0\<close> and b0: \<open>b \<ge> 0\<close> and \<open>c \<ge> 0\<close> *)
-  shows \<open>a \<ge> 0 \<Longrightarrow> b \<ge> 0 \<Longrightarrow> c \<ge> 0 \<Longrightarrow> a^k * (a - b) * (a - c) + b^k * (b - a) * (b - c) + c^k * (c - a) * (c - b) \<ge> 0\<close>
-    (is \<open>_ \<Longrightarrow> _ \<Longrightarrow> _ \<Longrightarrow> ?lhs \<ge> 0\<close>)
+  fixes a b c :: \<open>'a :: linordered_idom\<close> and k :: nat
+  assumes a0: \<open>a \<ge> 0\<close> and b0: \<open>b \<ge> 0\<close> and c0: \<open>c \<ge> 0\<close>
+  shows \<open>a^k * (a - b) * (a - c) + b^k * (b - a) * (b - c) + c^k * (c - a) * (c - b) \<ge> 0\<close>
+    (is \<open>?lhs \<ge> 0\<close>)
 proof -
-  assume a0: \<open>a \<ge> 0\<close> and b0: \<open>b \<ge> 0\<close> and c0: \<open>c \<ge> 0\<close>
-    (* TODO: We'd like to be able to use a0 b0 c0 from lemma-statement *)
   wlog \<open>a \<le> b \<and> b \<le> c\<close> generalizing a b c keeping a0 b0 c0
     (* TODO: we'd like to directly specify \<open>a \<le> b\<close> and \<open>b \<le> c\<close> *)
+    (* TODO: we'd like to add [simp] or similar to the wlog assumption *)
     (* TODO: Informative message should not refer to "". *)
     apply (rule rev_mp[OF c0]; rule rev_mp[OF b0]; rule rev_mp[OF a0])
     apply (rule linorder_wlog_3[of _ a b c])
      apply (simp add: algebra_simps)
     by (simp add: hypothesis)
 
-  then have [simp]: \<open>a \<le> b\<close> and [simp]: \<open>b \<le> c\<close>
+  then have [simp]: \<open>a \<le> b\<close> \<open>b \<le> c\<close>
     by auto
   then have [simp]: \<open>a \<le> c\<close>
     by linarith
+
   have \<open>?lhs = (c - b) * (c^k * (c - a) - b^k * (b - a)) + a^k * (c - a) * (b - a)\<close>
     by (simp add: algebra_simps)
   also have \<open>\<dots> \<ge> 0\<close>
@@ -119,3 +105,4 @@ proof -
   finally show \<open>?lhs \<ge> 0\<close>
     by -
 qed
+
